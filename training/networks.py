@@ -9,6 +9,8 @@
 import numpy as np
 import torch
 import functools
+from torch._C import dtype
+import torch.nn.functional as F
 from torch_utils import misc
 from torch_utils import persistence
 from torch_utils.ops import conv2d_resample
@@ -612,8 +614,8 @@ class DiscriminatorBlock(torch.nn.Module):
 
 @persistence.persistent_class
 class MinibatchStdLayer(torch.nn.Module):
-    def _init_(self, group_size, num_channels=1):
-        super()._init_()
+    def __init__(self, group_size=4, num_channels=1):
+        super().__init__()
         self.group_size = group_size
         self.num_channels = num_channels
 
@@ -763,9 +765,9 @@ class NLayerDiscriminator(torch.nn.Module):
     """Defines a PatchGAN discriminator"""
 
     def __init__(self,
-        c_dim,                          # Conditioning label (C) dimensionality.
-        img_resolution,                 # Input resolution.
-        img_channels,                   # Number of input color channels.
+        c_dim=None,                          # Conditioning label (C) dimensionality.
+        img_resolution=None,                 # Input resolution.
+        img_channels=None,                   # Number of input color channels.
         input_nc=3,
         ndf=64,
         n_layers=3,
@@ -780,7 +782,6 @@ class NLayerDiscriminator(torch.nn.Module):
         conv_clamp          = None,     # Clamp the output of convolution layers to +-X, None = disable clamping.
         cmap_dim            = None,     # Dimensionality of mapped conditioning label, None = default.
     ):
-
         """Construct a PatchGAN discriminator
         Parameters:
             input_nc (int)  -- the number of channels in input images
@@ -788,22 +789,7 @@ class NLayerDiscriminator(torch.nn.Module):
             n_layers (int)  -- the number of conv layers in the discriminator
             norm_layer      -- normalization layer
         """
-        super(NLayerDiscriminator, self).__init__()
-        
-        self.c_dim = c_dim
-        self.img_resolution = img_resolution
-        self.img_resolution_log2 = int(np.log2(img_resolution))
-        self.img_channels = img_channels
-        self.block_resolutions = [2 ** i for i in range(self.img_resolution_log2, 2, -1)]
-        channels_dict = {res: min(channel_base // res, channel_max) for res in self.block_resolutions + [4]}
-
-        if cmap_dim is None:
-            cmap_dim = channels_dict[4]
-        if c_dim == 0:
-            cmap_dim = 0
-            
-        common_kwargs = dict(img_channels=img_channels, architecture=architecture, conv_clamp=conv_clamp)
-
+        super().__init__()
         if type(norm_layer) == functools.partial:  # no need to use bias as BatchNorm2d has affine parameters
             use_bias = norm_layer.func == torch.nn.InstanceNorm2d
         else:
@@ -833,10 +819,15 @@ class NLayerDiscriminator(torch.nn.Module):
 
         sequence += [torch.nn.Conv2d(ndf * nf_mult, 1, kernel_size=kw, stride=1, padding=padw)]  # output 1 channel prediction map
         self.model = torch.nn.Sequential(*sequence)
-        self.b4 = DiscriminatorEpilogue(channels_dict[4], cmap_dim=cmap_dim, resolution=4, **epilogue_kwargs, **common_kwargs)
+        self.average_result = torch.nn.AvgPool2d(14,stride=1)
+        self.flatten = torch.nn.Flatten()
 
-    def forward(self, img, c, **block_kwargs):
+    def forward(self, input, c, **block_kwargs):
         """Standard forward."""
-        return self.b4(self.model(img))
+        out = self.model(input)
+        out = self.average_result(out)
+        out = self.flatten(out)
+        return out
+
 
 #----------------------------------------------------------------------------

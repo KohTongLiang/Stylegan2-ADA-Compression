@@ -12,6 +12,7 @@ import numpy as np
 import torch
 import warnings
 import dnnlib
+# from torch._C import dtype, uint8
 
 #----------------------------------------------------------------------------
 # Cached construction of constant tensors. Avoids CPU=>GPU copy when the
@@ -49,9 +50,15 @@ except AttributeError:
     def nan_to_num(input, nan=0.0, posinf=None, neginf=None, *, out=None): # pylint: disable=redefined-builtin
         assert isinstance(input, torch.Tensor)
         if posinf is None:
-            posinf = torch.finfo(input.dtype).max
+            if input.dtype == torch.int64:
+                posinf = torch.iinfo(input.dtype).max
+            else:
+                posinf = torch.finfo(input.dtype).max
         if neginf is None:
-            neginf = torch.finfo(input.dtype).min
+            if input.dtype == torch.int64:
+                posinf = torch.iinfo(input.dtype).min
+            else:
+                posinf = torch.finfo(input.dtype).min
         assert nan == 0
         return torch.clamp(input.unsqueeze(0).nansum(0), min=neginf, max=posinf, out=out)
 
