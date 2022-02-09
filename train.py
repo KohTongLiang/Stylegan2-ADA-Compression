@@ -16,7 +16,7 @@ import json
 import tempfile
 import torch
 import dnnlib
-
+import lpips
 from training import training_loop
 from metrics import metric_main
 from torch_utils import training_stats
@@ -64,6 +64,9 @@ def setup_training_loop_kwargs(
     allow_tf32 = None, # Allow PyTorch to use TF32 for matmul and convolutions: <bool>, default = False
     nobench    = None, # Disable cuDNN benchmarking: <bool>, default = False
     workers    = None, # Override number of DataLoader workers: <int>, default = 3
+
+    teacher    = None, # teacher model pickle file
+    compression  = None
 ):
     args = dnnlib.EasyDict()
 
@@ -166,6 +169,8 @@ def setup_training_loop_kwargs(
 
     assert cfg in cfg_specs
     spec = dnnlib.EasyDict(cfg_specs[cfg])
+    teacher_spec = dnnlib.EasyDict(cfg_specs['paper128_2'])
+
     if cfg == 'auto':
         desc += f'{gpus:d}'
         spec.ref_gpus = gpus
@@ -177,18 +182,30 @@ def setup_training_loop_kwargs(
         spec.gamma = 0.0002 * (res ** 2) / spec.mb # heuristic formula
         spec.ema = spec.mb * 10 / 32
 
+    args.T_kwargs = dnnlib.EasyDict(class_name='training.networks.Generator', z_dim=512, w_dim=512, mapping_kwargs=dnnlib.EasyDict(), synthesis_kwargs=dnnlib.EasyDict())
     args.G_kwargs = dnnlib.EasyDict(class_name='training.networks.Generator', z_dim=512, w_dim=512, mapping_kwargs=dnnlib.EasyDict(), synthesis_kwargs=dnnlib.EasyDict())
     args.D_kwargs = dnnlib.EasyDict(class_name='training.networks.Discriminator', block_kwargs=dnnlib.EasyDict(), mapping_kwargs=dnnlib.EasyDict(), epilogue_kwargs=dnnlib.EasyDict())
     # args.D_kwargs = dnnlib.EasyDict(class_name='training.networks.NLayerDiscriminator', block_kwargs=dnnlib.EasyDict(), mapping_kwargs=dnnlib.EasyDict(), epilogue_kwargs=dnnlib.EasyDict())
-    args.G_kwargs.synthesis_kwargs.channel_base = args.D_kwargs.channel_base = int(spec.fmaps * 32768)
-    args.G_kwargs.synthesis_kwargs.channel_max = args.D_kwargs.channel_max = 512
+    # args.G_kwargs.synthesis_kwargs.channel_base = args.D_kwargs.channel_base = int(spec.fmaps * 32768)
+    # args.G_kwargs.synthesis_kwargs.channel_max = args.D_kwargs.channel_max = 512
+    # args.G_kwargs.mapping_kwargs.num_layers = spec.map
+    # args.G_kwargs.synthesis_kwargs.num_fp16_res = args.D_kwargs.num_fp16_res = 4 # enable mixed-precision training
+    # args.G_kwargs.synthesis_kwargs.conv_clamp = args.D_kwargs.conv_clamp = 256 # clamp activations to avoid float16 overflow
+    args.G_kwargs.synthesis_kwargs.channel_base = int(spec.fmaps * 32768)
+    args.G_kwargs.synthesis_kwargs.channel_max = 512
     args.G_kwargs.mapping_kwargs.num_layers = spec.map
-    args.G_kwargs.synthesis_kwargs.num_fp16_res = args.D_kwargs.num_fp16_res = 4 # enable mixed-precision training
-    args.G_kwargs.synthesis_kwargs.conv_clamp = args.D_kwargs.conv_clamp = 256 # clamp activations to avoid float16 overflow
-    args.D_kwargs.epilogue_kwargs.mbstd_group_size = spec.mbstd
+    args.G_kwargs.synthesis_kwargs.num_fp16_res = 4 # enable mixed-precision training
+    args.G_kwargs.synthesis_kwargs.conv_clamp = 256 # clamp activations to avoid float16 overflow
+    args.T_kwargs.synthesis_kwargs.channel_base = args.D_kwargs.channel_base = int(teacher_spec.fmaps * 32768)
+    args.T_kwargs.synthesis_kwargs.channel_max = args.D_kwargs.channel_max = 512
+    args.T_kwargs.mapping_kwargs.num_layers = teacher_spec.map
+    args.T_kwargs.synthesis_kwargs.num_fp16_res = args.D_kwargs.num_fp16_res = 4 # enable mixed-precision training
+    args.T_kwargs.synthesis_kwargs.conv_clamp = args.D_kwargs.conv_clamp = 256 # clamp activations to avoid float16 overflow
+    args.D_kwargs.epilogue_kwargs.mbstd_group_size = teacher_spec.mbstd
 
     args.G_opt_kwargs = dnnlib.EasyDict(class_name='torch.optim.Adam', lr=spec.lrate, betas=[0,0.99], eps=1e-8)
-    args.D_opt_kwargs = dnnlib.EasyDict(class_name='torch.optim.Adam', lr=spec.lrate, betas=[0,0.99], eps=1e-8)
+    args.T_opt_kwargs = dnnlib.EasyDict(class_name='torch.optim.Adam', lr=spec.lrate, betas=[0,0.99], eps=1e-8)
+    args.D_opt_kwargs = dnnlib.EasyDict(class_name='torch.optim.Adam', lr=teacher_spec.lrate, betas=[0,0.99], eps=1e-8)
     args.loss_kwargs = dnnlib.EasyDict(class_name='training.loss.StyleGAN2Loss', r1_gamma=spec.gamma)
 
     args.total_kimg = spec.kimg
@@ -315,6 +332,10 @@ def setup_training_loop_kwargs(
         desc += '-resumecustom'
         args.resume_pkl = resume # custom path or url
 
+    # if compression load resume pkl
+    if teacher is not None:
+        args.t_model = teacher
+
     if resume != 'noresume':
         args.ada_kimg = 100 # make ADA react faster at the beginning
         args.ema_rampup = None # disable EMA rampup
@@ -334,14 +355,19 @@ def setup_training_loop_kwargs(
         fp32 = False
     assert isinstance(fp32, bool)
     if fp32:
-        args.G_kwargs.synthesis_kwargs.num_fp16_res = args.D_kwargs.num_fp16_res = 0
-        args.G_kwargs.synthesis_kwargs.conv_clamp = args.D_kwargs.conv_clamp = None
+        # args.G_kwargs.synthesis_kwargs.num_fp16_res = args.D_kwargs.num_fp16_res = 0
+        # args.G_kwargs.synthesis_kwargs.conv_clamp = args.D_kwargs.conv_clamp = None
+        args.G_kwargs.synthesis_kwargs.num_fp16_res = 0
+        args.G_kwargs.synthesis_kwargs.conv_clamp = None
+        args.T_kwargs.synthesis_kwargs.num_fp16_res = args.D_kwargs.num_fp16_res = 0
+        args.T_kwargs.synthesis_kwargs.conv_clamp = args.D_kwargs.conv_clamp = None
 
     if nhwc is None:
         nhwc = False
     assert isinstance(nhwc, bool)
     if nhwc:
-        args.G_kwargs.synthesis_kwargs.fp16_channels_last = args.D_kwargs.block_kwargs.fp16_channels_last = True
+        args.G_kwargs.synthesis_kwargs.fp16_channels_last = True
+        args.T_kwargs.synthesis_kwargs.fp16_channels_last = args.D_kwargs.block_kwargs.fp16_channels_last = True
 
     if nobench is None:
         nobench = False
@@ -439,6 +465,10 @@ class CommaSeparatedList(click.ParamType):
 @click.option('--nobench', help='Disable cuDNN benchmarking', type=bool, metavar='BOOL')
 @click.option('--allow-tf32', help='Allow PyTorch to use TF32 internally', type=bool, metavar='BOOL')
 @click.option('--workers', help='Override number of DataLoader workers', type=int, metavar='INT')
+
+# Compressions
+@click.option('--compression', help="Perform knowledge distillation on a 64x64 Model.", type=bool, metavar='BOOL')
+@click.option('--teacher', help='Teacher training file', metavar='PKL')
 
 def main(ctx, outdir, dry_run, **config_kwargs):
     """Train a GAN using the techniques described in the paper

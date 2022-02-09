@@ -407,6 +407,8 @@ class SynthesisBlock(torch.nn.Module):
         else:
             x = self.conv0(x, next(w_iter), fused_modconv=fused_modconv, **layer_kwargs)
             x = self.conv1(x, next(w_iter), fused_modconv=fused_modconv, **layer_kwargs)
+        
+        kernel = x
 
         # ToRGB.
         if img is not None:
@@ -419,7 +421,7 @@ class SynthesisBlock(torch.nn.Module):
 
         assert x.dtype == dtype
         assert img is None or img.dtype == torch.float32
-        return x, img
+        return x, img, kernel
 
 #----------------------------------------------------------------------------
 
@@ -460,6 +462,7 @@ class SynthesisNetwork(torch.nn.Module):
 
     def forward(self, ws, **block_kwargs):
         block_ws = []
+        kernels = []
         with torch.autograd.profiler.record_function('split_ws'):
             misc.assert_shape(ws, [None, self.num_ws, self.w_dim])
             ws = ws.to(torch.float32)
@@ -472,8 +475,9 @@ class SynthesisNetwork(torch.nn.Module):
         x = img = None
         for res, cur_ws in zip(self.block_resolutions, block_ws):
             block = getattr(self, f'b{res}')
-            x, img = block(x, img, cur_ws, **block_kwargs)
-        return img
+            x, img, kernel = block(x, img, cur_ws, **block_kwargs)
+            kernels.append(kernel)
+        return img, kernels
 
 #----------------------------------------------------------------------------
 
@@ -500,8 +504,8 @@ class Generator(torch.nn.Module):
 
     def forward(self, z, c, truncation_psi=1, truncation_cutoff=None, **synthesis_kwargs):
         ws = self.mapping(z, c, truncation_psi=truncation_psi, truncation_cutoff=truncation_cutoff)
-        img = self.synthesis(ws, **synthesis_kwargs)
-        return img
+        img, kernels = self.synthesis(ws, **synthesis_kwargs)
+        return img, kernels
 
 #----------------------------------------------------------------------------
 
@@ -560,6 +564,7 @@ class DiscriminatorBlock(torch.nn.Module):
     def forward(self, x, img, force_fp32=False):
         dtype = torch.float16 if self.use_fp16 and not force_fp32 else torch.float32
         memory_format = torch.channels_last if self.channels_last and not force_fp32 else torch.contiguous_format
+        kernels = []
 
         # Input.
         if x is not None:
