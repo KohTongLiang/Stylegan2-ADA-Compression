@@ -11,6 +11,7 @@ import torch
 from torch.nn.functional import bilinear
 from torch_utils import training_stats
 from torch_utils import misc
+from torchvision.utils import save_image
 from torch_utils.ops import conv2d_gradfix
 
 #----------------------------------------------------------------------------
@@ -98,25 +99,27 @@ class StyleGAN2Loss(Loss):
             with torch.autograd.profiler.record_function('Gmain_forward'):
                 gen_img, _gen_ws, s_kernels = self.run_G(gen_z, gen_c, sync=(sync and not do_Gpl)) # May get synced by Gpl.
                 # upsample generated image
-                gen_img = torch.nn.functional.interpolate(gen_img, (128),mode='bilinear',align_corners=False)
+                # gen_img = torch.nn.functional.interpolate(gen_img, (real_img.size()[-1]),mode='bilinear',align_corners=False)
+                ### kernel alignment
                 _, _, t_kernels = self.run_T(gen_z, gen_c, sync=(sync and not do_Gpl)) # get kernels from teacher networks
-                # knowledge distillation loss
+                # save_image(gen_img, './test_student.png')
+                # save_image(test_i, './test_teacher.png')
                 dist_loss = 0
                 for s_k, t_k in zip(s_kernels, t_kernels):
+                    # t_k = torch.nn.functional.interpolate(s_k, (gen_img.size()[-1]),mode='bilinear',align_corners=False)
                     dist_loss += self.kernel_alignment(s_k, t_k)
-                dist_loss = -dist_loss    
-                # generator loss
+                dist_loss = -dist_loss
+                ### generator loss
                 gen_logits = self.run_D(gen_img, gen_c, sync=False)
                 training_stats.report('Loss/scores/fake', gen_logits)
                 training_stats.report('Loss/signs/fake', gen_logits.sign())
-                # perceptual loss
-                # print(f'gen {gen_img.shape}')
-                # print(f'real {gen_c.shape}')
+                ### perceptual loss
                 perc_loss = self.perc_loss(gen_img,real_img,loss_fn_vgg)
-                # generator loss
+                ### generator loss
                 loss_Gmain = torch.nn.functional.softplus(-gen_logits) # -log(sigmoid(gen_logits))
                 # combine all losses
                 loss_Gmain = loss_Gmain + dist_loss + perc_loss
+                # loss_Gmain = loss_Gmain
                 training_stats.report('Loss/G/loss', loss_Gmain)
             with torch.autograd.profiler.record_function('Gmain_backward'):
                 loss_Gmain.mean().mul(gain).backward()
@@ -146,7 +149,7 @@ class StyleGAN2Loss(Loss):
             with torch.autograd.profiler.record_function('Dgen_forward'):
                 gen_img, _gen_ws, kernels = self.run_G(gen_z, gen_c, sync=False)
                 # upsample generated image
-                gen_img = torch.nn.functional.interpolate(gen_img, (128),mode='bilinear',align_corners=False)
+                # gen_img = torch.nn.functional.interpolate(gen_img, (128),mode='bilinear',align_corners=False)
                 gen_logits = self.run_D(gen_img, gen_c, sync=False) # Gets synced by loss_Dreal.
                 training_stats.report('Loss/scores/fake', gen_logits)
                 training_stats.report('Loss/signs/fake', gen_logits.sign())

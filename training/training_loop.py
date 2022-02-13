@@ -122,6 +122,8 @@ def training_loop(
     abort_fn                = None,     # Callback function for determining whether to abort training. Must return consistent results across ranks.
     progress_fn             = None,     # Callback function for updating training progress. Called for all ranks.
     t_model                 = None,
+    source_res              = None,
+    target_res              = None,
 ):
     # Initialize.
     start_time = time.time()
@@ -150,11 +152,11 @@ def training_loop(
     # Construct networks.
     if rank == 0:
         print('Constructing networks...')
-    common_kwargs = dict(c_dim=training_set.label_dim, img_resolution=training_set.resolution, img_channels=training_set.num_channels)
-    teacher_kwargs = dict(c_dim=training_set.label_dim, img_resolution=128, img_channels=training_set.num_channels)
+    common_kwargs = dict(c_dim=training_set.label_dim, img_resolution=target_res, img_channels=training_set.num_channels)
+    teacher_kwargs = dict(c_dim=training_set.label_dim, img_resolution=source_res, img_channels=training_set.num_channels)
     G = dnnlib.util.construct_class_by_name(**G_kwargs, **common_kwargs).train().requires_grad_(False).to(device) # subclass of torch.nn.Module
     T = dnnlib.util.construct_class_by_name(**T_kwargs, **teacher_kwargs).train().requires_grad_(False).to(device) # subclass of torch.nn.Module
-    D = dnnlib.util.construct_class_by_name(**D_kwargs, **teacher_kwargs).train().requires_grad_(False).to(device) # subclass of torch.nn.Module
+    D = dnnlib.util.construct_class_by_name(**D_kwargs, **common_kwargs).train().requires_grad_(False).to(device) # subclass of torch.nn.Module
     G_ema = copy.deepcopy(G).eval()
     T_ema = copy.deepcopy(T).eval()
 
@@ -174,7 +176,7 @@ def training_loop(
         print(f'Loading teacher network {resume_pkl}')
         with dnnlib.util.open_url(resume_pkl) as f:
             teacher_data = legacy.load_network_pkl(f)
-        for name, module in [('G', T), ('D', D), ('G_ema', T_ema)]:
+        for name, module in [('G', T), ('G_ema', T_ema)]:
             misc.copy_params_and_buffers(teacher_data[name], module, require_all=False)
 
         # inheriting teacher mapping network

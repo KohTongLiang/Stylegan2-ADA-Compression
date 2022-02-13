@@ -407,8 +407,6 @@ class SynthesisBlock(torch.nn.Module):
         else:
             x = self.conv0(x, next(w_iter), fused_modconv=fused_modconv, **layer_kwargs)
             x = self.conv1(x, next(w_iter), fused_modconv=fused_modconv, **layer_kwargs)
-        
-        kernel = x
 
         # ToRGB.
         if img is not None:
@@ -421,7 +419,7 @@ class SynthesisBlock(torch.nn.Module):
 
         assert x.dtype == dtype
         assert img is None or img.dtype == torch.float32
-        return x, img, kernel
+        return x, img
 
 #----------------------------------------------------------------------------
 
@@ -445,7 +443,6 @@ class SynthesisNetwork(torch.nn.Module):
         self.block_resolutions = [2 ** i for i in range(2, self.img_resolution_log2 + 1)]
         channels_dict = {res: min(channel_base // res, channel_max) for res in self.block_resolutions}
         fp16_resolution = max(2 ** (self.img_resolution_log2 + 1 - num_fp16_res), 8)
-        print(channels_dict)
 
         self.num_ws = 0
         for res in self.block_resolutions:
@@ -475,8 +472,8 @@ class SynthesisNetwork(torch.nn.Module):
         x = img = None
         for res, cur_ws in zip(self.block_resolutions, block_ws):
             block = getattr(self, f'b{res}')
-            x, img, kernel = block(x, img, cur_ws, **block_kwargs)
-            kernels.append(kernel)
+            x, img = block(x, img, cur_ws, **block_kwargs)
+            kernels.append(img)
         return img, kernels
 
 #----------------------------------------------------------------------------
