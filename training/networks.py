@@ -443,6 +443,7 @@ class SynthesisNetwork(torch.nn.Module):
         self.block_resolutions = [2 ** i for i in range(2, self.img_resolution_log2 + 1)]
         channels_dict = {res: min(channel_base // res, channel_max) for res in self.block_resolutions}
         fp16_resolution = max(2 ** (self.img_resolution_log2 + 1 - num_fp16_res), 8)
+        print(channels_dict)
 
         self.num_ws = 0
         for res in self.block_resolutions:
@@ -765,13 +766,13 @@ class NLayerDiscriminator(torch.nn.Module):
     """Defines a PatchGAN discriminator"""
 
     def __init__(self,
+        input_nc=3,
+        ndf=64,
+        n_layers=3, # original 3
+        norm_layer=torch.nn.BatchNorm2d,
         c_dim=None,                          # Conditioning label (C) dimensionality.
         img_resolution=None,                 # Input resolution.
         img_channels=None,                   # Number of input color channels.
-        input_nc=3,
-        ndf=64,
-        n_layers=3,
-        norm_layer=torch.nn.BatchNorm2d,
         architecture        = 'resnet', # Architecture: 'orig', 'skip', 'resnet'.
         block_kwargs        = {},       # Arguments for DiscriminatorBlock.
         mapping_kwargs      = {},       # Arguments for MappingNetwork.
