@@ -6,6 +6,7 @@
 # distribution of this software and related documentation without an express
 # license agreement from NVIDIA CORPORATION is strictly prohibited.
 
+from re import S
 import numpy as np
 import torch
 import functools
@@ -286,16 +287,15 @@ class SynthesisLayer(torch.nn.Module):
             self.noise_strength = torch.nn.Parameter(torch.zeros([]))
         self.bias = torch.nn.Parameter(torch.zeros([out_channels]))
 
-    def forward(self, x, w, noise_mode='random', fused_modconv=True, gain=1):
+    def forward(self, x, w, noise=None, noise_mode='random', fused_modconv=True, gain=1):
         assert noise_mode in ['random', 'const', 'none']
         in_resolution = self.resolution // self.up
         misc.assert_shape(x, [None, self.weight.shape[1], in_resolution, in_resolution])
-        styles = self.affine(w)
+        styles = self.affine(w) # A
 
-        noise = None
-        if self.use_noise and noise_mode == 'random':
+        if self.use_noise and noise_mode == 'random' and noise is None:
             noise = torch.randn([x.shape[0], 1, self.resolution, self.resolution], device=x.device) * self.noise_strength
-        if self.use_noise and noise_mode == 'const':
+        if self.use_noise and noise_mode == 'const' and noise is None:
             noise = self.noise_const * self.noise_strength
 
         flip_weight = (self.up == 1) # slightly faster
@@ -379,7 +379,7 @@ class SynthesisBlock(torch.nn.Module):
             self.skip = Conv2dLayer(in_channels, out_channels, kernel_size=1, bias=False, up=2,
                 resample_filter=resample_filter, channels_last=self.channels_last)
 
-    def forward(self, x, img, ws, force_fp32=False, fused_modconv=None, **layer_kwargs):
+    def forward(self, x, img, ws, noise = None, force_fp32=False, fused_modconv=None, last = False, **layer_kwargs):
         misc.assert_shape(ws, [None, self.num_conv + self.num_torgb, self.w_dim])
         w_iter = iter(ws.unbind(dim=1))
         dtype = torch.float16 if self.use_fp16 and not force_fp32 else torch.float32
@@ -397,22 +397,34 @@ class SynthesisBlock(torch.nn.Module):
             x = x.to(dtype=dtype, memory_format=memory_format)
 
         # Main layers.
-        if self.in_channels == 0:
-            x = self.conv1(x, next(w_iter), fused_modconv=fused_modconv, **layer_kwargs)
-        elif self.architecture == 'resnet':
-            y = self.skip(x, gain=np.sqrt(0.5))
-            x = self.conv0(x, next(w_iter), fused_modconv=fused_modconv, **layer_kwargs)
-            x = self.conv1(x, next(w_iter), fused_modconv=fused_modconv, gain=np.sqrt(0.5), **layer_kwargs)
-            x = y.add_(x)
+        if noise is not None:
+            if self.in_channels == 0:
+                x = self.conv1(x, next(w_iter), noise=noise, fused_modconv=fused_modconv, **layer_kwargs)
+            elif self.architecture == 'resnet':
+                y = self.skip(x, gain=np.sqrt(0.5))
+                x = self.conv0(x, next(w_iter), noise=noise[0], fused_modconv=fused_modconv, **layer_kwargs)
+                x = self.conv1(x, next(w_iter), noise=noise[1], fused_modconv=fused_modconv, gain=np.sqrt(0.5), **layer_kwargs)
+                x = y.add_(x)
+            else:
+                x = self.conv0(x, next(w_iter), noise=noise[0], fused_modconv=fused_modconv, **layer_kwargs)
+                x = self.conv1(x, next(w_iter), noise=noise[1], fused_modconv=fused_modconv, **layer_kwargs)
         else:
-            x = self.conv0(x, next(w_iter), fused_modconv=fused_modconv, **layer_kwargs)
-            x = self.conv1(x, next(w_iter), fused_modconv=fused_modconv, **layer_kwargs)
+            if self.in_channels == 0:
+                x = self.conv1(x, next(w_iter), fused_modconv=fused_modconv, **layer_kwargs)
+            elif self.architecture == 'resnet':
+                y = self.skip(x, gain=np.sqrt(0.5))
+                x = self.conv0(x, next(w_iter), fused_modconv=fused_modconv, **layer_kwargs)
+                x = self.conv1(x, next(w_iter), fused_modconv=fused_modconv, gain=np.sqrt(0.5), **layer_kwargs)
+                x = y.add_(x)
+            else:
+                x = self.conv0(x, next(w_iter), fused_modconv=fused_modconv, **layer_kwargs)
+                x = self.conv1(x, next(w_iter), fused_modconv=fused_modconv, **layer_kwargs)
 
         # ToRGB.
         if img is not None:
             misc.assert_shape(img, [None, self.img_channels, self.resolution // 2, self.resolution // 2])
             img = upfirdn2d.upsample2d(img, self.resample_filter)
-        if self.is_last or self.architecture == 'skip':
+        if self.is_last or last == True or self.architecture == 'skip':
             y = self.torgb(x, next(w_iter), fused_modconv=fused_modconv)
             y = y.to(dtype=torch.float32, memory_format=torch.contiguous_format)
             img = img.add_(y) if img is not None else y
@@ -457,7 +469,7 @@ class SynthesisNetwork(torch.nn.Module):
                 self.num_ws += block.num_torgb
             setattr(self, f'b{res}', block)
 
-    def forward(self, ws, **block_kwargs):
+    def forward(self, ws, noise_bufs = None, target_res = None, **block_kwargs):
         block_ws = []
         kernels = []
         with torch.autograd.profiler.record_function('split_ws'):
@@ -470,10 +482,12 @@ class SynthesisNetwork(torch.nn.Module):
                 w_idx += block.num_conv
 
         x = img = None
-        for res, cur_ws in zip(self.block_resolutions, block_ws):
-            block = getattr(self, f'b{res}')
-            x, img = block(x, img, cur_ws, **block_kwargs)
-            kernels.append(img)
+        if noise_bufs is None:
+            # no noise injection
+            for res, cur_ws in zip(self.block_resolutions, block_ws):
+                block = getattr(self, f'b{res}')
+                x, img = block(x, img, cur_ws, **block_kwargs)
+                kernels.append(img)
         return img, kernels
 
 #----------------------------------------------------------------------------
@@ -766,7 +780,6 @@ class Discriminator(torch.nn.Module):
 
 class NLayerDiscriminator(torch.nn.Module):
     """Defines a PatchGAN discriminator"""
-
     def __init__(self,
         input_nc=3,
         ndf=64,
