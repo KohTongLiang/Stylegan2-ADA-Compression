@@ -117,6 +117,7 @@ def training_loop(
     image_snapshot_ticks    = 50,       # How often to save image snapshots? None = disable.
     network_snapshot_ticks  = 50,       # How often to save network snapshots? None = disable.
     resume_pkl              = None,     # Network pickle to resume training from.
+    teacher_pkl             = None,     # Network pickle to resume training from.
     cudnn_benchmark         = True,     # Enable torch.backends.cudnn.benchmark?
     allow_tf32              = False,    # Enable torch.backends.cuda.matmul.allow_tf32 and torch.backends.cudnn.allow_tf32?
     abort_fn                = None,     # Callback function for determining whether to abort training. Must return consistent results across ranks.
@@ -154,7 +155,7 @@ def training_loop(
         print('Constructing networks...')
     common_kwargs = dict(c_dim=training_set.label_dim, img_resolution=target_res, img_channels=training_set.num_channels)
     teacher_kwargs = dict(c_dim=training_set.label_dim, img_resolution=source_res, img_channels=training_set.num_channels)
-    G = dnnlib.util.construct_class_by_name(**G_kwargs, **common_kwargs).train().requires_grad_(False).to(device) # subclass of torch.nn.Module
+    G = dnnlib.util.construct_class_by_name(**T_kwargs, **common_kwargs).train().requires_grad_(False).to(device) # subclass of torch.nn.Module
     T = dnnlib.util.construct_class_by_name(**T_kwargs, **teacher_kwargs).train().requires_grad_(False).to(device) # subclass of torch.nn.Module
     D = dnnlib.util.construct_class_by_name(**D_kwargs, **common_kwargs).train().requires_grad_(False).to(device) # subclass of torch.nn.Module
     G_ema = copy.deepcopy(G).eval()
@@ -163,27 +164,48 @@ def training_loop(
     # init the lpips here
     loss_fn_vgg = lpips.LPIPS(net='vgg').to(device)
 
-    # Resume from existing pickle.
-    # if (resume_pkl is not None) and (rank == 0):
-    #     print(f'Resuming from "{resume_pkl}"')
-    #     with dnnlib.util.open_url(resume_pkl) as f:
-    #         resume_data = legacy.load_network_pkl(f)
-    #     for name, module in [('G', G), ('D', D), ('G_ema', G_ema)]:
-    #         misc.copy_params_and_buffers(resume_data[name], module, require_all=False)
+    # copy noise & resampling buffers so that both network has sane noise maps
+    # t_noise_bufs = { name: buf for (name, buf) in T.synthesis.named_buffers() if "noise_const" in name }
+    # t_others = getattr(G.synthesis,'b128')
+    # t_others2 = getattr(t_others, 'conv0')
+    
+    # for res, (name, buf) in zip(G.synthesis.block_resolutions, t_noise_bufs.items()):
+    #     a = getattr(G.synthesis, f'b{res}')
+    #     if a.in_channels == 0:
+    #         setattr(a.conv1, "noise_const", t_noise_bufs[f'b{str(res)}.conv1.noise_const'])
+    #     else:
+    #         b = getattr(a.conv0, "noise_const")
+    #         c = getattr(a.conv1, "noise_const")
+    #         setattr(a.conv0, "noise_const", t_noise_bufs[f'b{str(res)}.conv0.noise_const'])
+    #         setattr(a.conv1, "noise_const", t_noise_bufs[f'b{str(res)}.conv1.noise_const'])
+    #     setattr(G.synthesis, f'b{res}', a)
+
+    # Resume student network from existing pickle.
+    if (resume_pkl is not None) and (rank == 0):
+        print(f'Resuming from "{resume_pkl}"')
+        with dnnlib.util.open_url(resume_pkl) as f:
+            resume_data = legacy.load_network_pkl(f)
+        for name, module in [('G', G), ('D', D), ('G_ema', G_ema)]:
+            misc.copy_params_and_buffers(resume_data[name], module, require_all=False)
 
     # Load teacher pkl
-    if (resume_pkl is not None) and (rank == 0):
-        print(f'Loading teacher network {resume_pkl}')
-        with dnnlib.util.open_url(resume_pkl) as f:
+    # Student network will intially inherit everything from Teacher network
+    if (teacher_pkl is not None) and (rank == 0):
+        print(f'Loading teacher network {teacher_pkl}')
+        with dnnlib.util.open_url(teacher_pkl) as f:
             teacher_data = legacy.load_network_pkl(f)
         for name, module in [('G', T), ('G_ema', T_ema)]:
             misc.copy_params_and_buffers(teacher_data[name], module, require_all=False)
-
-        # inheriting teacher mapping network
-        if (resume_pkl is not None):
-            print(f'Inheriting teacher networks mapping network.')
+        if resume_pkl is not None:
+            # initialise with teacher network
             for name, module in [('G', G), ('G_ema', G_ema)]:
-                misc.copy_params_and_buffers(teacher_data[name].mapping, module.mapping, require_all=False)
+                misc.copy_params_and_buffers(teacher_data[name], module, require_all=False)
+        # inheriting teacher mapping network
+        # if (teacher_pkl is not None):
+        #     print(f'Inheriting teacher networks mapping network.')
+        #     for name, module in [('G', G), ('G_ema', G_ema)]:
+        #         misc.copy_params_and_buffers(teacher_data[name].mapping, module.mapping, require_all=True, freeze=True)
+
 
     # Print network summary tables.
     # if rank == 0:
@@ -210,10 +232,12 @@ def training_loop(
     for name, module in [('G_mapping', G.mapping), ('G_synthesis', G.synthesis),('T_mapping', T.mapping), ('T_synthesis', T.synthesis), ('D', D), (None, G_ema), (None, T_ema), ('augment_pipe', augment_pipe)]:
         if (num_gpus > 1) and (module is not None) and len(list(module.parameters())) != 0:
             module.requires_grad_(True)
-            module = torch.nn.parallel.DistributedDataParallel(module, device_ids=[device], broadcast_buffers=False)
+            module = torch.nn.parallel.DistributedDataParallel(module, device_ids=[device], broadcast_buffers=False, find_unused_parameters=True)
             module.requires_grad_(False)
         if name is not None:
             ddp_modules[name] = module
+
+    print()
 
     # Setup training phases.
     if rank == 0:
@@ -285,7 +309,6 @@ def training_loop(
     if progress_fn is not None:
         progress_fn(0, total_kimg)
     while True:
-
         # Fetch training data.
         with torch.autograd.profiler.record_function('data_fetch'):
             phase_real_img, phase_real_c = next(training_set_iterator)
