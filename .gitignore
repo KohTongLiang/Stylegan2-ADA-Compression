@@ -3,3 +3,4 @@ __pycache__/
 dataset/*
 out/*
 ffhq128-patch_disc/*
+ffhq-68-training-runs/*
