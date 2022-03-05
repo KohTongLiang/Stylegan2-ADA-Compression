@@ -397,28 +397,16 @@ class SynthesisBlock(torch.nn.Module):
             x = x.to(dtype=dtype, memory_format=memory_format)
 
         # Main layers.
-        if noise is not None:
-            if self.in_channels == 0:
-                x = self.conv1(x, next(w_iter), noise=noise, fused_modconv=fused_modconv, **layer_kwargs)
-            elif self.architecture == 'resnet':
-                y = self.skip(x, gain=np.sqrt(0.5))
-                x = self.conv0(x, next(w_iter), noise=noise[0], fused_modconv=fused_modconv, **layer_kwargs)
-                x = self.conv1(x, next(w_iter), noise=noise[1], fused_modconv=fused_modconv, gain=np.sqrt(0.5), **layer_kwargs)
-                x = y.add_(x)
-            else:
-                x = self.conv0(x, next(w_iter), noise=noise[0], fused_modconv=fused_modconv, **layer_kwargs)
-                x = self.conv1(x, next(w_iter), noise=noise[1], fused_modconv=fused_modconv, **layer_kwargs)
+        if self.in_channels == 0:
+            x = self.conv1(x, next(w_iter), fused_modconv=fused_modconv, **layer_kwargs)
+        elif self.architecture == 'resnet':
+            y = self.skip(x, gain=np.sqrt(0.5))
+            x = self.conv0(x, next(w_iter), fused_modconv=fused_modconv, **layer_kwargs)
+            x = self.conv1(x, next(w_iter), fused_modconv=fused_modconv, gain=np.sqrt(0.5), **layer_kwargs)
+            x = y.add_(x)
         else:
-            if self.in_channels == 0:
-                x = self.conv1(x, next(w_iter), fused_modconv=fused_modconv, **layer_kwargs)
-            elif self.architecture == 'resnet':
-                y = self.skip(x, gain=np.sqrt(0.5))
-                x = self.conv0(x, next(w_iter), fused_modconv=fused_modconv, **layer_kwargs)
-                x = self.conv1(x, next(w_iter), fused_modconv=fused_modconv, gain=np.sqrt(0.5), **layer_kwargs)
-                x = y.add_(x)
-            else:
-                x = self.conv0(x, next(w_iter), fused_modconv=fused_modconv, **layer_kwargs)
-                x = self.conv1(x, next(w_iter), fused_modconv=fused_modconv, **layer_kwargs)
+            x = self.conv0(x, next(w_iter), fused_modconv=fused_modconv, **layer_kwargs)
+            x = self.conv1(x, next(w_iter), fused_modconv=fused_modconv, **layer_kwargs)
 
         # ToRGB.
         if img is not None:

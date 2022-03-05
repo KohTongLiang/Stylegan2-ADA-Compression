@@ -194,11 +194,11 @@ def training_loop(
         print(f'Loading teacher network {teacher_pkl}')
         with dnnlib.util.open_url(teacher_pkl) as f:
             teacher_data = legacy.load_network_pkl(f)
-        for name, module in [('G', T), ('G_ema', T_ema)]:
+        for name, module in [('G', T), ('G_ema', T_ema), ('D', D)]:
             misc.copy_params_and_buffers(teacher_data[name], module, require_all=False)
         if resume_pkl is not None:
             # initialise with teacher network
-            for name, module in [('G', G), ('G_ema', G_ema)]:
+            for name, module in [('G', T), ('G_ema', T_ema), ('D', D)]:
                 misc.copy_params_and_buffers(teacher_data[name], module, require_all=False)
         # inheriting teacher mapping network
         # if (teacher_pkl is not None):
