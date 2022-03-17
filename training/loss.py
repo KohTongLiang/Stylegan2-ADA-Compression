@@ -50,7 +50,7 @@ class StyleGAN2Loss(Loss):
                     cutoff = torch.where(torch.rand([], device=ws.device) < self.style_mixing_prob, cutoff, torch.full_like(cutoff, ws.shape[1]))
                     ws[:, cutoff:] = self.G_mapping(torch.randn_like(z), c, skip_w_avg_update=True)[:, cutoff:]
         with misc.ddp_sync(self.G_synthesis, sync):
-            img, kernels = self.G_synthesis(ws)
+            img, kernels = self.G_synthesis(ws, noise_mode='const')
         return img, ws, kernels
 
     # generate teacher
@@ -63,7 +63,7 @@ class StyleGAN2Loss(Loss):
                     cutoff = torch.where(torch.rand([], device=ws.device) < self.style_mixing_prob, cutoff, torch.full_like(cutoff, ws.shape[1]))
                     ws[:, cutoff:] = self.T_mapping(torch.randn_like(z), c, skip_w_avg_update=True)[:, cutoff:]
         with misc.ddp_sync(self.T_synthesis, sync):
-            img, kernels = self.T_synthesis(ws)
+            img, kernels = self.T_synthesis(ws, noise_mode='const')
         return img, ws, kernels
 
     def run_D(self, img, c, sync):
