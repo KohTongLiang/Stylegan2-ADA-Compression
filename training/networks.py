@@ -457,7 +457,7 @@ class SynthesisNetwork(torch.nn.Module):
                 self.num_ws += block.num_torgb
             setattr(self, f'b{res}', block)
 
-    def forward(self, ws, noise_bufs = None, target_res = None, **block_kwargs):
+    def forward(self, ws, **block_kwargs):
         block_ws = []
         kernels = []
         with torch.autograd.profiler.record_function('split_ws'):
@@ -470,12 +470,11 @@ class SynthesisNetwork(torch.nn.Module):
                 w_idx += block.num_conv
 
         x = img = None
-        if noise_bufs is None:
-            # no noise injection
-            for res, cur_ws in zip(self.block_resolutions, block_ws):
-                block = getattr(self, f'b{res}')
-                x, img = block(x, img, cur_ws, **block_kwargs)
-                kernels.append(img)
+        # no noise injection
+        for res, cur_ws in zip(self.block_resolutions, block_ws):
+            block = getattr(self, f'b{res}')
+            x, img = block(x, img, cur_ws, **block_kwargs)
+            kernels.append(img)
         return img, kernels
 
 #----------------------------------------------------------------------------

@@ -113,7 +113,8 @@ def training_loop(
     ada_interval            = 4,        # How often to perform ADA adjustment?
     ada_kimg                = 500,      # ADA adjustment speed, measured in how many kimg it takes for p to increase/decrease by one unit.
     total_kimg              = 25000,    # Total length of the training, measured in thousands of real images.
-    kimg_per_tick           = 4,        # Progress snapshot interval.
+    # kimg_per_tick           = 4,        # Progress snapshot interval.
+    kimg_per_tick           = 8,        
     image_snapshot_ticks    = 50,       # How often to save image snapshots? None = disable.
     network_snapshot_ticks  = 50,       # How often to save network snapshots? None = disable.
     resume_pkl              = None,     # Network pickle to resume training from.
@@ -123,8 +124,8 @@ def training_loop(
     abort_fn                = None,     # Callback function for determining whether to abort training. Must return consistent results across ranks.
     progress_fn             = None,     # Callback function for updating training progress. Called for all ranks.
     t_model                 = None,
-    source_res              = None,
-    target_res              = None,
+    source_res              = 64,
+    target_res              = 64,
 ):
     # Initialize.
     start_time = time.time()
@@ -155,7 +156,7 @@ def training_loop(
         print('Constructing networks...')
     common_kwargs = dict(c_dim=training_set.label_dim, img_resolution=target_res, img_channels=training_set.num_channels)
     teacher_kwargs = dict(c_dim=training_set.label_dim, img_resolution=source_res, img_channels=training_set.num_channels)
-    G = dnnlib.util.construct_class_by_name(**T_kwargs, **common_kwargs).train().requires_grad_(False).to(device) # subclass of torch.nn.Module
+    G = dnnlib.util.construct_class_by_name(**G_kwargs, **common_kwargs).train().requires_grad_(False).to(device) # subclass of torch.nn.Module
     T = dnnlib.util.construct_class_by_name(**T_kwargs, **teacher_kwargs).train().requires_grad_(False).to(device) # subclass of torch.nn.Module
     D = dnnlib.util.construct_class_by_name(**D_kwargs, **common_kwargs).train().requires_grad_(False).to(device) # subclass of torch.nn.Module
     G_ema = copy.deepcopy(G).eval()
@@ -164,11 +165,8 @@ def training_loop(
     # init the lpips here
     loss_fn_vgg = lpips.LPIPS(net='vgg').to(device)
 
-    # copy noise & resampling buffers so that both network has sane noise maps
+    ## copy noise & resampling buffers so that both network has sane noise maps
     # t_noise_bufs = { name: buf for (name, buf) in T.synthesis.named_buffers() if "noise_const" in name }
-    # t_others = getattr(G.synthesis,'b128')
-    # t_others2 = getattr(t_others, 'conv0')
-    
     # for res, (name, buf) in zip(G.synthesis.block_resolutions, t_noise_bufs.items()):
     #     a = getattr(G.synthesis, f'b{res}')
     #     if a.in_channels == 0:
@@ -181,31 +179,27 @@ def training_loop(
     #     setattr(G.synthesis, f'b{res}', a)
 
     # Resume student network from existing pickle.
-    if (resume_pkl is not None) and (rank == 0):
+    if resume_pkl is not None and rank == 0:
         print(f'Resuming from "{resume_pkl}"')
         with dnnlib.util.open_url(resume_pkl) as f:
             resume_data = legacy.load_network_pkl(f)
-        for name, module in [('G', G), ('D', D), ('G_ema', G_ema)]:
+        for name, module in [('G', G), ('G_ema', G_ema), ('D', D)]:
             misc.copy_params_and_buffers(resume_data[name], module, require_all=False)
 
     # Load teacher pkl
     # Student network will intially inherit everything from Teacher network
-    if (teacher_pkl is not None) and (rank == 0):
+    if teacher_pkl is not None and rank == 0:
         print(f'Loading teacher network {teacher_pkl}')
         with dnnlib.util.open_url(teacher_pkl) as f:
             teacher_data = legacy.load_network_pkl(f)
-        for name, module in [('G', T), ('G_ema', T_ema), ('D', D)]:
+        # load teacher network weights here
+        for name, module in [('G', T), ('G_ema', T_ema)]:
             misc.copy_params_and_buffers(teacher_data[name], module, require_all=False)
-        if resume_pkl is not None:
-            # initialise with teacher network
-            for name, module in [('G', T), ('G_ema', T_ema), ('D', D)]:
-                misc.copy_params_and_buffers(teacher_data[name], module, require_all=False)
         # inheriting teacher mapping network
-        # if (teacher_pkl is not None):
-        #     print(f'Inheriting teacher networks mapping network.')
-        #     for name, module in [('G', G), ('G_ema', G_ema)]:
-        #         misc.copy_params_and_buffers(teacher_data[name].mapping, module.mapping, require_all=True, freeze=True)
-
+        if teacher_pkl is not None and resume_pkl is None:
+            print(f'Inheriting teacher networks mapping network.')
+            for name, module in [('G', G), ('G_ema', G_ema)]:
+                misc.copy_params_and_buffers(teacher_data[name].mapping, module.mapping, require_all=True, freeze=False)
 
     # Print network summary tables.
     # if rank == 0:
@@ -236,8 +230,6 @@ def training_loop(
             module.requires_grad_(False)
         if name is not None:
             ddp_modules[name] = module
-
-    print()
 
     # Setup training phases.
     if rank == 0:
@@ -273,7 +265,7 @@ def training_loop(
         save_image_grid(images, os.path.join(run_dir, 'reals.png'), drange=[0,255], grid_size=grid_size)
         grid_z = torch.randn([labels.shape[0], G.z_dim], device=device).split(batch_gpu)
         grid_c = torch.from_numpy(labels).to(device).split(batch_gpu)
-        img = []
+        img = [] 
         for z, c in zip(grid_z, grid_c):
             imgs, _ = G_ema(z=z, c=c, noise_mode='const')
             img.append(imgs.cpu())

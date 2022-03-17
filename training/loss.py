@@ -50,7 +50,7 @@ class StyleGAN2Loss(Loss):
                     cutoff = torch.where(torch.rand([], device=ws.device) < self.style_mixing_prob, cutoff, torch.full_like(cutoff, ws.shape[1]))
                     ws[:, cutoff:] = self.G_mapping(torch.randn_like(z), c, skip_w_avg_update=True)[:, cutoff:]
         with misc.ddp_sync(self.G_synthesis, sync):
-            img, kernels = self.G_synthesis(ws, noise_mode='const')
+            img, kernels = self.G_synthesis(ws)
         return img, ws, kernels
 
     # generate teacher
@@ -63,7 +63,7 @@ class StyleGAN2Loss(Loss):
                     cutoff = torch.where(torch.rand([], device=ws.device) < self.style_mixing_prob, cutoff, torch.full_like(cutoff, ws.shape[1]))
                     ws[:, cutoff:] = self.T_mapping(torch.randn_like(z), c, skip_w_avg_update=True)[:, cutoff:]
         with misc.ddp_sync(self.T_synthesis, sync):
-            img, kernels = self.T_synthesis(ws, noise_mode='const')
+            img, kernels = self.T_synthesis(ws)
         return img, ws, kernels
 
     def run_D(self, img, c, sync):
@@ -95,39 +95,37 @@ class StyleGAN2Loss(Loss):
         do_Gpl   = (phase in ['Greg', 'Gboth']) and (self.pl_weight != 0)
         do_Dr1   = (phase in ['Dreg', 'Dboth']) and (self.r1_gamma != 0)
 
-        t_image, _, t_kernels = self.run_T(gen_z, gen_c, sync=(sync and not do_Gpl)) # get kernels from teacher networks
-        # real_img = t_image
+        t_img, _, t_kernels = self.run_T(gen_z, gen_c, sync=(sync and not do_Gpl)) # get kernels from teacher networks
+        # real_img = t_img
 
         # Gmain: Maximize logits for generated images.
         if do_Gmain:
             with torch.autograd.profiler.record_function('Gmain_forward'):
                 gen_img, _gen_ws, s_kernels = self.run_G(gen_z, gen_c, sync=(sync and not do_Gpl)) # May get synced by Gpl.
-                # save_image(t_image, "./out/testing/teacher_image.png")
-                # save_image(gen_img, "./out/testing/student_image.png")
+                save_image(t_img, "./out/testing/teacher_image.png")
+                save_image(gen_img, "./out/testing/student_image.png")
                 ### kernel alignment
                 # dist_loss = 0
                 # for s_k, t_k in zip(s_kernels, t_kernels):
-                    # t_k = torch.nn.functional.interpolate(t_k, (real_img.size()[-1]),mode='bilinear',align_corners=False)
-                #     dist_loss = dist_loss + self.kernel_alignment(s_k, t_k)
+                #     dist_loss = dist_loss + self.kernel_alignment(s_k, t_k) # student similarity
                 # dist_loss = -dist_loss
-                ### RGB + Perc loss MSE Loss
-                rgb = 0
-                perc_loss = 0
-                mse = torch.nn.MSELoss()
-                for s_k, t_k in zip(s_kernels, t_kernels):
-                    rgb = rgb + mse(s_k, t_k)
-                    perc_loss = perc_loss + self.perc_loss(gen_img, t_image, loss_fn_vgg)
+                ### RGB Loss, we use L1
+                # for s_k, t_k in zip(s_kernels, t_kernels):
+                #     rgb = rgb + l1(s_k, t_k)
+                # mse_loss = torch.nn.MSELoss()
+                # rgb = mse_loss(gen_img, t_img)
                 ### perceptual loss
-                # perc_loss = self.perc_loss(gen_img, t_image, loss_fn_vgg)
+                perc_loss = self.perc_loss(gen_img, t_img, loss_fn_vgg)
                 ### L1 Loss
-                # l1_loss = torch.nn.L1Loss(gen_img, t_image)
+                l1 = torch.nn.L1Loss()
+                l1_loss = l1(gen_img, t_img)
                 ### generator loss
                 gen_logits = self.run_D(gen_img, gen_c, sync=False)
                 training_stats.report('Loss/scores/fake', gen_logits)
                 training_stats.report('Loss/signs/fake', gen_logits.sign())
                 loss_Gmain = torch.nn.functional.softplus(-gen_logits) # -log(sigmoid(gen_logits))
                 # combine all losses
-                loss_Gmain = loss_Gmain + rgb + perc_loss
+                loss_Gmain = loss_Gmain + l1_loss + perc_loss
                 training_stats.report('Loss/G/loss', loss_Gmain)
             # backpropagation
             with torch.autograd.profiler.record_function('Gmain_backward'):
@@ -153,12 +151,9 @@ class StyleGAN2Loss(Loss):
 
         # Dmain: Minimize logits for generated images.
         loss_Dgen = 0
-        # don't train discriminators
         if do_Dmain:
             with torch.autograd.profiler.record_function('Dgen_forward'):
                 gen_img, _gen_ws, kernels = self.run_G(gen_z, gen_c, sync=False)
-                # upsample generated image
-                # gen_img = torch.nn.functional.interpolate(gen_img, (128),mode='bilinear',align_corners=False)
                 gen_logits = self.run_D(gen_img, gen_c, sync=False) # Gets synced by loss_Dreal.
                 training_stats.report('Loss/scores/fake', gen_logits)
                 training_stats.report('Loss/signs/fake', gen_logits.sign())
@@ -171,7 +166,7 @@ class StyleGAN2Loss(Loss):
         if do_Dmain or do_Dr1:
             name = 'Dreal_Dr1' if do_Dmain and do_Dr1 else 'Dreal' if do_Dmain else 'Dr1'
             with torch.autograd.profiler.record_function(name + '_forward'):
-                real_img_tmp = t_image.detach().requires_grad_(do_Dr1)
+                real_img_tmp = real_img.detach().requires_grad_(do_Dr1)
                 real_logits = self.run_D(real_img_tmp, real_c, sync=sync)
                 training_stats.report('Loss/scores/real', real_logits)
                 training_stats.report('Loss/signs/real', real_logits.sign())

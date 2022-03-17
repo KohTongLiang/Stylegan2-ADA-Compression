@@ -11,6 +11,7 @@
 import os
 import re
 from typing import List, Optional
+from torchprofile import profile_macs
 
 import click
 import dnnlib
@@ -117,6 +118,9 @@ def generate_images(
         print('Generating image for seed %d (%d/%d) ...' % (seed, seed_idx, len(seeds)))
         z = torch.from_numpy(np.random.RandomState(seed).randn(1, G.z_dim)).to(device)
         img, _ = G(z, label, truncation_psi=truncation_psi, noise_mode=noise_mode)
+        inputs = (z,label)
+        macs = profile_macs(G, inputs)
+        print(macs) # print MAC calculation
         img = (img.permute(0, 2, 3, 1) * 127.5 + 128).clamp(0, 255).to(torch.uint8)
         PIL.Image.fromarray(img[0].cpu().numpy(), 'RGB').save(f'{outdir}/seed{seed:04d}.png')
 

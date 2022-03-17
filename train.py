@@ -66,9 +66,8 @@ def setup_training_loop_kwargs(
     workers    = None, # Override number of DataLoader workers: <int>, default = 3
 
     teacher    = None, # teacher model pickle file
-    compression  = None,
-    source_res = None,
-    target_res = None,
+    source_res = 64,
+    target_res = 64,
 ):
     args = dnnlib.EasyDict()
 
@@ -165,7 +164,10 @@ def setup_training_loop_kwargs(
         'paper128_1':  dict(ref_gpus=1,  kimg=25000,  mb=32, mbstd=8,  fmaps=0.5, lrate=0.0025, gamma=1,    ema=20,  ramp=None, map=8),
         'paper256':  dict(ref_gpus=8,  kimg=25000,  mb=64, mbstd=8,  fmaps=0.5, lrate=0.0025, gamma=1,    ema=20,  ramp=None, map=8),
         'paper64_2':  dict(ref_gpus=2,  kimg=25000,  mb=64, mbstd=8,  fmaps=0.125, lrate=0.0025, gamma=1,    ema=20,  ramp=None, map=8),
+        'paper64_2_t':  dict(ref_gpus=2,  kimg=25000,  mb=64, mbstd=8,  fmaps=0.5, lrate=0.0025, gamma=1,    ema=20,  ramp=None, map=8),
         'paper128_2':  dict(ref_gpus=2,  kimg=25000,  mb=64, mbstd=8,  fmaps=0.5, lrate=0.0025, gamma=1,    ema=20,  ramp=None, map=8),
+        'paper64_1_t':  dict(ref_gpus=1,  kimg=25000,  mb=64, mbstd=8,  fmaps=0.5, lrate=0.0025, gamma=1,    ema=20,  ramp=None, map=8),
+        'paper64_1':  dict(ref_gpus=1,  kimg=25000,  mb=64, mbstd=8,  fmaps=0.125, lrate=0.0025, gamma=1,    ema=20,  ramp=None, map=8),
         'paper256_2':  dict(ref_gpus=2,  kimg=25000,  mb=64, mbstd=8,  fmaps=0.5, lrate=0.0025, gamma=1,    ema=20,  ramp=None, map=8),
         'paper512':  dict(ref_gpus=8,  kimg=25000,  mb=64, mbstd=8,  fmaps=1,   lrate=0.0025, gamma=0.5,  ema=20,  ramp=None, map=8),
         'paper1024': dict(ref_gpus=8,  kimg=25000,  mb=32, mbstd=4,  fmaps=1,   lrate=0.002,  gamma=2,    ema=10,  ramp=None, map=8),
@@ -174,7 +176,7 @@ def setup_training_loop_kwargs(
 
     assert cfg in cfg_specs
     spec = dnnlib.EasyDict(cfg_specs[cfg])
-    teacher_spec = dnnlib.EasyDict(cfg_specs['paper128_2'])
+    teacher_spec = dnnlib.EasyDict(cfg_specs['paper64_1_t'])
 
     if cfg == 'auto':
         desc += f'{gpus:d}'
@@ -191,17 +193,20 @@ def setup_training_loop_kwargs(
     args.G_kwargs = dnnlib.EasyDict(class_name='training.networks.Generator', z_dim=512, w_dim=512, mapping_kwargs=dnnlib.EasyDict(), synthesis_kwargs=dnnlib.EasyDict())
     args.D_kwargs = dnnlib.EasyDict(class_name='training.networks.Discriminator', block_kwargs=dnnlib.EasyDict(), mapping_kwargs=dnnlib.EasyDict(), epilogue_kwargs=dnnlib.EasyDict())
     # args.D_kwargs = dnnlib.EasyDict(class_name='training.networks.NLayerDiscriminator', block_kwargs=dnnlib.EasyDict(), mapping_kwargs=dnnlib.EasyDict(), epilogue_kwargs=dnnlib.EasyDict())
-    args.G_kwargs.synthesis_kwargs.channel_base = args.D_kwargs.channel_base = int(spec.fmaps * 32768)
-    args.G_kwargs.synthesis_kwargs.channel_max = args.D_kwargs.channel_max = 512
+    
+    args.G_kwargs.synthesis_kwargs.channel_base = int(spec.fmaps * 32768)
+    args.G_kwargs.synthesis_kwargs.channel_max = 512
     args.G_kwargs.mapping_kwargs.num_layers = spec.map
-    args.G_kwargs.synthesis_kwargs.num_fp16_res = args.D_kwargs.num_fp16_res = 4 # enable mixed-precision training
-    args.G_kwargs.synthesis_kwargs.conv_clamp = args.D_kwargs.conv_clamp = 256 # clamp activations to avoid float16 overflow
-    args.T_kwargs.synthesis_kwargs.channel_base = int(teacher_spec.fmaps * 32768)
-    args.T_kwargs.synthesis_kwargs.channel_max = 512
+    args.G_kwargs.synthesis_kwargs.num_fp16_res = 4 # enable mixed-precision training
+    args.G_kwargs.synthesis_kwargs.conv_clamp = 256 # clamp activations to avoid float16 overflow
+
+    args.T_kwargs.synthesis_kwargs.channel_base = args.D_kwargs.channel_base = int(teacher_spec.fmaps * 32768)
+    args.T_kwargs.synthesis_kwargs.channel_max = args.D_kwargs.channel_max = 512
     args.T_kwargs.mapping_kwargs.num_layers = teacher_spec.map
-    args.T_kwargs.synthesis_kwargs.num_fp16_res = 4 # enable mixed-precision training
-    args.T_kwargs.synthesis_kwargs.conv_clamp = 256 # clamp activations to avoid float16 overflow
-    args.D_kwargs.epilogue_kwargs.mbstd_group_size = spec.mbstd
+    args.T_kwargs.synthesis_kwargs.num_fp16_res = args.D_kwargs.num_fp16_res = 4 # enable mixed-precision training
+    args.T_kwargs.synthesis_kwargs.conv_clamp = args.D_kwargs.conv_clamp = 256 # clamp activations to avoid float16 overflow
+    
+    args.D_kwargs.epilogue_kwargs.mbstd_group_size = teacher_spec.mbstd
 
     args.G_opt_kwargs = dnnlib.EasyDict(class_name='torch.optim.Adam', lr=spec.lrate, betas=[0,0.99], eps=1e-8)
     args.T_opt_kwargs = dnnlib.EasyDict(class_name='torch.optim.Adam', lr=teacher_spec.lrate, betas=[0,0.99], eps=1e-8)
@@ -369,17 +374,17 @@ def setup_training_loop_kwargs(
     if fp32:
         # args.G_kwargs.synthesis_kwargs.num_fp16_res = args.D_kwargs.num_fp16_res = 0
         # args.G_kwargs.synthesis_kwargs.conv_clamp = args.D_kwargs.conv_clamp = None
-        args.G_kwargs.synthesis_kwargs.num_fp16_res = 0
-        args.G_kwargs.synthesis_kwargs.conv_clamp = None
-        args.T_kwargs.synthesis_kwargs.num_fp16_res = args.D_kwargs.num_fp16_res = 0
-        args.T_kwargs.synthesis_kwargs.conv_clamp = args.D_kwargs.conv_clamp = None
+        args.G_kwargs.synthesis_kwargs.num_fp16_res = args.D_kwargs.num_fp16_res = 0
+        args.G_kwargs.synthesis_kwargs.conv_clamp = args.D_kwargs.conv_clamp = None
+        args.T_kwargs.synthesis_kwargs.num_fp16_res = 0
+        args.T_kwargs.synthesis_kwargs.conv_clamp = None
 
     if nhwc is None:
         nhwc = False
     assert isinstance(nhwc, bool)
     if nhwc:
-        args.G_kwargs.synthesis_kwargs.fp16_channels_last = True
-        args.T_kwargs.synthesis_kwargs.fp16_channels_last = args.D_kwargs.block_kwargs.fp16_channels_last = True
+        args.G_kwargs.synthesis_kwargs.fp16_channels_last = args.D_kwargs.block_kwargs.fp16_channels_last = True
+        args.T_kwargs.synthesis_kwargs.fp16_channels_last = True
 
     if nobench is None:
         nobench = False
@@ -456,7 +461,7 @@ class CommaSeparatedList(click.ParamType):
 @click.option('--mirror', help='Enable dataset x-flips [default: false]', type=bool, metavar='BOOL')
 
 # Base config.
-@click.option('--cfg', help='Base config [default: auto]', type=click.Choice(['auto', 'stylegan2', 'paper256', 'paper64_2', 'paper128_2', 'paper128_1', 'paper256_2', 'paper512', 'paper1024', 'cifar']))
+@click.option('--cfg', help='Base config [default: auto]', type=click.Choice(['auto', 'stylegan2', 'paper256', 'paper64_2', 'paper64_1', 'paper128_2', 'paper128_1', 'paper256_2', 'paper512', 'paper1024', 'cifar']))
 @click.option('--gamma', help='Override R1 gamma', type=float)
 @click.option('--kimg', help='Override training duration', type=int, metavar='INT')
 @click.option('--batch', help='Override batch size', type=int, metavar='INT')
@@ -479,7 +484,6 @@ class CommaSeparatedList(click.ParamType):
 @click.option('--workers', help='Override number of DataLoader workers', type=int, metavar='INT')
 
 # Compressions
-@click.option('--compression', help="Perform knowledge distillation on a 64x64 Model.", type=bool, metavar='BOOL')
 @click.option('--teacher', help='Teacher training file', metavar='PKL')
 @click.option('--source_res', help="Source network image resolution.", type=int, metavar="INT")
 @click.option('--target_res', help="Target network image resolution.", type=int, metavar="INT")
