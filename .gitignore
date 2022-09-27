@@ -5,3 +5,4 @@ out/*
 ffhq128-patch_disc/*
 ffhq-68-training-runs/*
 networks/*
+*.sh
