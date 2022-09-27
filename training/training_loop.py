@@ -16,13 +16,13 @@ import PIL.Image
 import numpy as np
 import torch
 import dnnlib
-import lpips
+import legacy
+
 from torch_utils import misc
 from torch_utils import training_stats
 from torch_utils.ops import conv2d_gradfix
 from torch_utils.ops import grid_sample_gradfix
 
-import legacy
 from metrics import metric_main
 
 #----------------------------------------------------------------------------
@@ -161,9 +161,6 @@ def training_loop(
     D = dnnlib.util.construct_class_by_name(**D_kwargs, **common_kwargs).train().requires_grad_(False).to(device) # subclass of torch.nn.Module
     G_ema = copy.deepcopy(G).eval()
     T_ema = copy.deepcopy(T).eval()
-
-    # init the lpips here
-    loss_fn_vgg = lpips.LPIPS(net='vgg').to(device)
 
     ## copy noise & resampling buffers so that both network has sane noise maps
     # t_noise_bufs = { name: buf for (name, buf) in T.synthesis.named_buffers() if "noise_const" in name }

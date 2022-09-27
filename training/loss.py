@@ -6,14 +6,16 @@
 # distribution of this software and related documentation without an express
 # license agreement from NVIDIA CORPORATION is strictly prohibited.
 
-from tkinter import W
 import numpy as np
 import torch
+import lpips
+
 from torch.nn.functional import bilinear
 from torch_utils import training_stats
 from torch_utils import misc
 from torchvision.utils import save_image
 from torch_utils.ops import conv2d_gradfix
+from tkinter import W
 
 #----------------------------------------------------------------------------
 
@@ -39,6 +41,8 @@ class StyleGAN2Loss(Loss):
         self.pl_decay = pl_decay
         self.pl_weight = pl_weight
         self.pl_mean = torch.zeros([], device=device)
+        self.l1_loss = torch.nn.L1Loss()
+        self.loss_fn_vgg = lpips.LPIPS(net='vgg').to(device)
         
     # generate student
     def run_G(self, z, c, sync):
@@ -85,7 +89,7 @@ class StyleGAN2Loss(Loss):
         return ret
     
     # perc loss
-    def perc_loss(self, student_img, original_img, loss_fn_vgg):
+    def perceptual_loss(self, student_img, original_img, loss_fn_vgg):
         return loss_fn_vgg(student_img, original_img)
 
     def accumulate_gradients(self, phase, real_img, real_c, gen_z, gen_c, sync, gain, loss_fn_vgg):
@@ -102,31 +106,35 @@ class StyleGAN2Loss(Loss):
         if do_Gmain:
             with torch.autograd.profiler.record_function('Gmain_forward'):
                 gen_img, _gen_ws, s_kernels = self.run_G(gen_z, gen_c, sync=(sync and not do_Gpl)) # May get synced by Gpl.
-                save_image(t_img, "./out/testing/teacher_image.png")
-                save_image(gen_img, "./out/testing/student_image.png")
+
                 ### kernel alignment
                 # dist_loss = 0
                 # for s_k, t_k in zip(s_kernels, t_kernels):
                 #     dist_loss = dist_loss + self.kernel_alignment(s_k, t_k) # student similarity
                 # dist_loss = -dist_loss
+
                 ### RGB Loss, we use L1
                 # for s_k, t_k in zip(s_kernels, t_kernels):
                 #     rgb = rgb + l1(s_k, t_k)
                 # mse_loss = torch.nn.MSELoss()
                 # rgb = mse_loss(gen_img, t_img)
+
                 ### perceptual loss
-                perc_loss = self.perc_loss(gen_img, t_img, loss_fn_vgg)
+                perc_loss = self.perceptual_loss(gen_img, t_img, loss_fn_vgg)
+
                 ### L1 Loss
-                l1 = torch.nn.L1Loss()
-                l1_loss = l1(gen_img, t_img)
+                l1_loss = self.l1_loss(gen_img, t_img)
+
                 ### generator loss
                 gen_logits = self.run_D(gen_img, gen_c, sync=False)
                 training_stats.report('Loss/scores/fake', gen_logits)
                 training_stats.report('Loss/signs/fake', gen_logits.sign())
                 loss_Gmain = torch.nn.functional.softplus(-gen_logits) # -log(sigmoid(gen_logits))
+
                 # combine all losses
                 loss_Gmain = loss_Gmain + l1_loss + perc_loss
                 training_stats.report('Loss/G/loss', loss_Gmain)
+
             # backpropagation
             with torch.autograd.profiler.record_function('Gmain_backward'):
                 loss_Gmain.mean().mul(gain).backward()
