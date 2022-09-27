@@ -2,33 +2,17 @@
 
 **Description**
 
-This is a experiment on StyleGAN2 model compression using knowledge distillation technique. The compressed model (a model with smaller channel size) is trained in a teacher-student paradigm.
+This is an experiment on StyleGAN2 model compression using knowledge distillation technique. The compressed model (a model with smaller channel size) is trained with a teacher-student paradigm.
+
+![Diagram of the knowledge distillation training paradigm](./figures/knowledge-distillation.PNG)
+
+Using a pre-trained model, we train a smaller sized model to be able to outperform the original trained model.
 
 **Original Repositry**<br>
 
 https://github.com/NVlabs/stylegan2-ada-pytorch
 
-## Data repository
-
-| Path | Description
-| :--- | :----------
-| [stylegan2-ada-pytorch](https://nvlabs-fi-cdn.nvidia.com/stylegan2-ada-pytorch/) | Main directory hosted on Amazon S3
-| &ensp;&ensp;&boxvr;&nbsp; [ada-paper.pdf](https://nvlabs-fi-cdn.nvidia.com/stylegan2-ada-pytorch/ada-paper.pdf) | Paper PDF
-| &ensp;&ensp;&boxvr;&nbsp; [images](https://nvlabs-fi-cdn.nvidia.com/stylegan2-ada-pytorch/images/) | Curated example images produced using the pre-trained models
-| &ensp;&ensp;&boxvr;&nbsp; [videos](https://nvlabs-fi-cdn.nvidia.com/stylegan2-ada-pytorch/videos/) | Curated example interpolation videos
-| &ensp;&ensp;&boxur;&nbsp; [pretrained](https://nvlabs-fi-cdn.nvidia.com/stylegan2-ada-pytorch/pretrained/) | Pre-trained models
-| &ensp;&ensp;&ensp;&ensp;&boxvr;&nbsp; ffhq.pkl | FFHQ at 1024x1024, trained using original StyleGAN2
-| &ensp;&ensp;&ensp;&ensp;&boxvr;&nbsp; metfaces.pkl | MetFaces at 1024x1024, transfer learning from FFHQ using ADA
-| &ensp;&ensp;&ensp;&ensp;&boxvr;&nbsp; afhqcat.pkl | AFHQ Cat at 512x512, trained from scratch using ADA
-| &ensp;&ensp;&ensp;&ensp;&boxvr;&nbsp; afhqdog.pkl | AFHQ Dog at 512x512, trained from scratch using ADA
-| &ensp;&ensp;&ensp;&ensp;&boxvr;&nbsp; afhqwild.pkl | AFHQ Wild at 512x512, trained from scratch using ADA
-| &ensp;&ensp;&ensp;&ensp;&boxvr;&nbsp; cifar10.pkl | Class-conditional CIFAR-10 at 32x32
-| &ensp;&ensp;&ensp;&ensp;&boxvr;&nbsp; brecahad.pkl | BreCaHAD at 512x512, trained from scratch using ADA
-| &ensp;&ensp;&ensp;&ensp;&boxvr;&nbsp; [paper-fig7c-training-set-sweeps](https://nvlabs-fi-cdn.nvidia.com/stylegan2-ada-pytorch/pretrained/paper-fig7c-training-set-sweeps/) | Models used in Fig.7c (sweep over training set size)
-| &ensp;&ensp;&ensp;&ensp;&boxvr;&nbsp; [paper-fig11a-small-datasets](https://nvlabs-fi-cdn.nvidia.com/stylegan2-ada-pytorch/pretrained/paper-fig11a-small-datasets/) | Models used in Fig.11a (small datasets & transfer learning)
-| &ensp;&ensp;&ensp;&ensp;&boxvr;&nbsp; [paper-fig11b-cifar10](https://nvlabs-fi-cdn.nvidia.com/stylegan2-ada-pytorch/pretrained/paper-fig11b-cifar10/) | Models used in Fig.11b (CIFAR-10)
-| &ensp;&ensp;&ensp;&ensp;&boxvr;&nbsp; [transfer-learning-source-nets](https://nvlabs-fi-cdn.nvidia.com/stylegan2-ada-pytorch/pretrained/transfer-learning-source-nets/) | Models used as starting point for transfer learning
-| &ensp;&ensp;&ensp;&ensp;&boxur;&nbsp; [metrics](https://nvlabs-fi-cdn.nvidia.com/stylegan2-ada-pytorch/pretrained/metrics/) | Feature detectors used by the quality metrics
+Original codebase can be assessed on the master branch as well.
 
 ## Requirements
 
@@ -40,30 +24,6 @@ https://github.com/NVlabs/stylegan2-ada-pytorch
 * Docker users: use the [provided Dockerfile](./Dockerfile) to build an image with the required library dependencies.
 
 The code relies heavily on custom PyTorch extensions that are compiled on the fly using NVCC. On Windows, the compilation requires Microsoft Visual Studio. We recommend installing [Visual Studio Community Edition](https://visualstudio.microsoft.com/vs/) and adding it into `PATH` using `"C:\Program Files (x86)\Microsoft Visual Studio\<VERSION>\Community\VC\Auxiliary\Build\vcvars64.bat"`.
-
-## Getting started
-
-Pre-trained networks are stored as `*.pkl` files that can be referenced using local filenames or URLs:
-
-```.bash
-# Generate curated MetFaces images without truncation (Fig.10 left)
-python generate.py --outdir=out --trunc=1 --seeds=85,265,297,849 \
-    --network=https://nvlabs-fi-cdn.nvidia.com/stylegan2-ada-pytorch/pretrained/metfaces.pkl
-
-# Generate uncurated MetFaces images with truncation (Fig.12 upper left)
-python generate.py --outdir=out --trunc=0.7 --seeds=600-605 \
-    --network=https://nvlabs-fi-cdn.nvidia.com/stylegan2-ada-pytorch/pretrained/metfaces.pkl
-
-# Generate class conditional CIFAR-10 images (Fig.17 left, Car)
-python generate.py --outdir=out --seeds=0-35 --class=1 \
-    --network=https://nvlabs-fi-cdn.nvidia.com/stylegan2-ada-pytorch/pretrained/cifar10.pkl
-
-# Style mixing example
-python style_mixing.py --outdir=out --rows=85,100,75,458,1500 --cols=55,821,1789,293 \
-    --network=https://nvlabs-fi-cdn.nvidia.com/stylegan2-ada-pytorch/pretrained/metfaces.pkl
-```
-
-Outputs from the above commands are placed under `out/*.png`, controlled by `--outdir`. Downloaded network pickles are cached under `$HOME/.cache/dnnlib`, which can be overridden by setting the `DNNLIB_CACHE_DIR` environment variable. The default PyTorch extension build directory is `$HOME/.cache/torch_extensions`, which can be overridden by setting `TORCH_EXTENSIONS_DIR`.
 
 **Docker**: You can run the above curated image example using Docker as follows:
 
@@ -82,47 +42,6 @@ python legacy.py \
     --source=https://nvlabs-fi-cdn.nvidia.com/stylegan2/networks/stylegan2-cat-config-f.pkl \
     --dest=stylegan2-cat-config-f.pkl
 ```
-
-## Projecting images to latent space
-
-To find the matching latent vector for a given image file, run:
-
-```.bash
-python projector.py --outdir=out --target=~/mytargetimg.png \
-    --network=https://nvlabs-fi-cdn.nvidia.com/stylegan2-ada-pytorch/pretrained/ffhq.pkl
-```
-
-For optimal results, the target image should be cropped and aligned similar to the [FFHQ dataset](https://github.com/NVlabs/ffhq-dataset). The above command saves the projection target `out/target.png`, result `out/proj.png`, latent vector `out/projected_w.npz`, and progression video `out/proj.mp4`. You can render the resulting latent vector by specifying `--projected_w` for `generate.py`:
-
-```.bash
-python generate.py --outdir=out --projected_w=out/projected_w.npz \
-    --network=https://nvlabs-fi-cdn.nvidia.com/stylegan2-ada-pytorch/pretrained/ffhq.pkl
-```
-
-## Using networks from Python
-
-You can use pre-trained networks in your own Python code as follows:
-
-```.python
-with open('ffhq.pkl', 'rb') as f:
-    G = pickle.load(f)['G_ema'].cuda()  # torch.nn.Module
-z = torch.randn([1, G.z_dim]).cuda()    # latent codes
-c = None                                # class labels (not used in this example)
-img = G(z, c)                           # NCHW, float32, dynamic range [-1, +1]
-```
-
-The above code requires `torch_utils` and `dnnlib` to be accessible via `PYTHONPATH`. It does not need source code for the networks themselves &mdash; their class definitions are loaded from the pickle via `torch_utils.persistence`.
-
-The pickle contains three networks. `'G'` and `'D'` are instantaneous snapshots taken during training, and `'G_ema'` represents a moving average of the generator weights over several training steps. The networks are regular instances of `torch.nn.Module`, with all of their parameters and buffers placed on the CPU at import and gradient computation disabled by default.
-
-The generator consists of two submodules, `G.mapping` and `G.synthesis`, that can be executed separately. They also support various additional options:
-
-```.python
-w = G.mapping(z, c, truncation_psi=0.5, truncation_cutoff=8)
-img = G.synthesis(w, noise_mode='const', force_fp32=True)
-```
-
-Please refer to [`generate.py`](./generate.py), [`style_mixing.py`](./style_mixing.py), and [`projector.py`](./projector.py) for further examples.
 
 ## Preparing datasets
 
@@ -207,6 +126,8 @@ python dataset_tool.py --source=/tmp/brecahad-crops --dest=~/datasets/brecahad.z
 
 ## Distilling the network
 
+First, make sure that there is a pre-trained teacher model trained with the original codebase (can be found in the master branch). Next, define a configuration under cfg_specs 
+in [`train.py`] for the student model. You can reduce fmaps to get a smaller sized model. Run the following command to begin the distilling process:
 
 ```.bash
 python train.py \
@@ -219,16 +140,6 @@ python train.py \
 ```
 
 Additional ```.bash --dry-run``` flag can be added to test the commands.
-
-
-| Base config           | Description
-| :-------------------- | :----------
-| `auto`&nbsp;(default) | Automatically select reasonable defaults based on resolution and GPU count. Serves as a good starting point for new datasets but does not necessarily lead to optimal results.
-| `stylegan2`           | Reproduce results for StyleGAN2 config F at 1024x1024 using 1, 2, 4, or 8 GPUs.
-| `paper256`            | Reproduce results for FFHQ and LSUN Cat at 256x256 using 1, 2, 4, or 8 GPUs.
-| `paper512`            | Reproduce results for BreCaHAD and AFHQ at 512x512 using 1, 2, 4, or 8 GPUs.
-| `paper1024`           | Reproduce results for MetFaces at 1024x1024 using 1, 2, 4, or 8 GPUs.
-| `cifar`               | Reproduce results for CIFAR-10 (tuned configuration) using 1 or 2 GPUs.
 
 The training configuration can be further customized with additional command line options:
 
@@ -259,12 +170,6 @@ python calc_metrics.py --metrics=pr50k3_full \
 python calc_metrics.py --metrics=fid50k_full --data=~/datasets/ffhq.zip --mirror=1 \
     --network=https://nvlabs-fi-cdn.nvidia.com/stylegan2-ada-pytorch/pretrained/ffhq.pkl
 ```
-
-## License
-
-Copyright &copy; 2021, NVIDIA Corporation. All rights reserved.
-
-This work is made available under the [Nvidia Source Code License](https://nvlabs.github.io/stylegan2-ada-pytorch/license.html).
 
 ## Citation
 
